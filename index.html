@@ -455,7 +455,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
-<div id="version-banner-cliente" onclick="toggleDebugLogCliente()" style="position:fixed;top:0;left:0;right:0;background:#ff0066;color:#fff;text-align:center;padding:6px;font-size:12px;font-weight:900;letter-spacing:0.5px;z-index:9999999">VERSIÓN DE PRUEBA — v31-oct-realtimefix1 (toca 3 veces para ver el registro)</div>
+<div id="version-banner-cliente" onclick="toggleDebugLogCliente()" style="position:fixed;top:0;left:0;right:0;background:#ff0066;color:#fff;text-align:center;padding:6px;font-size:12px;font-weight:900;letter-spacing:0.5px;z-index:9999999">VERSIÓN DE PRUEBA — 7 oct, 8:00 a.m. — avisos1 (toca 3 veces para ver el registro)</div>
 <div id="debug-log-cliente" style="display:none;position:fixed;top:28px;left:0;right:0;background:#111;color:#0f0;font-family:monospace;font-size:10px;padding:8px;z-index:9999998;max-height:40vh;overflow-y:auto;white-space:pre-wrap"></div>
 <script>
   const logCliente = [];
@@ -3273,6 +3273,12 @@ async function checkEventStatus() {
       // antes esto se decidia solo por el horario, lo que dejaba comprar en una carpa
       // que nadie habia abierto, con tal de que la hora cayera dentro de su horario.
       const carpaAbierta = carpaElegida.tiendaAbierta === true;
+      // Arreglo del 7-oct-2026: la variable general (tiendaAbierta) se quedaba con el valor del
+      // evento en general (que con carpas siempre es "cerrada"), aunque ESTA carpa estuviera
+      // abierta. Por eso, al primer aviso que llegaba de Caja, la app creia que la tienda
+      // "acababa de reabrir": mostraba ese letrero y sacaba al cliente de donde estuviera
+      // (por ejemplo, de la pantalla con su numero de pedido recien pagado).
+      tiendaAbierta = carpaAbierta;
 
       if (!carpaAbierta) {
         const abiertas = data.carpas.filter(c => c.tiendaAbierta === true).map(c => c.nombre).filter(n => n !== carpaElegida.nombre);
@@ -3323,9 +3329,16 @@ function showClosedNotice() {
   document.getElementById('offline-msg').textContent = isEs
     ? 'No estamos tomando pedidos en línea en este momento'
     : 'We are not taking online orders at this time';
-  document.getElementById('offline-sub').textContent = isEs
-    ? 'Vuelve a intentarlo más tarde, o dirígete a la caja si seguimos en el lugar.'
-    : 'Please check back later, or visit the register if we are still on site.';
+  // Arreglo del 7-oct-2026: si esta persona ya tiene un pedido en curso, lo primero que
+  // necesita saber es que su pedido NO se cancelo por el cierre.
+  const tienePedidoEnCurso = (typeof activeOrders !== 'undefined') && activeOrders && activeOrders.length > 0;
+  document.getElementById('offline-sub').textContent = tienePedidoEnCurso
+    ? (isEs
+        ? 'Ya no recibimos pedidos nuevos, pero tu pedido sigue en curso. Te avisamos aquí mismo cuando esté listo.'
+        : "We're not taking new orders, but your order is still in progress. We'll let you know right here when it's ready.")
+    : (isEs
+        ? 'Vuelve a intentarlo más tarde, o dirígete a la caja si seguimos en el lugar.'
+        : 'Please check back later, or visit the register if we are still on site.');
   document.getElementById('offline-cta').textContent = isEs
     ? '🛒 Dirígete a la caja'
     : '🛒 Please visit the register';
@@ -3395,10 +3408,17 @@ function subscribeToEventStatus() {
         if (payload.new.codigo) currentEventCodigo = payload.new.codigo;
         currentEventPrecios = payload.new.precios || currentEventPrecios;
 
+        // Arreglo del 7-oct-2026: esto se dispara con CADA actualizacion del evento (el latido
+        // de Caja llega cada 5 segundos), asi que solo reaccionamos en el momento exacto en
+        // que cambia de abierta a cerrada o al reves - y sin sacar de su pantalla a quien no
+        // esta comprando. El que esta viendo su pedido (o en la bienvenida) se queda ahi: su
+        // pedido sigue su curso normal aunque la tienda cierre.
+        const pantallaActiva = (document.querySelector('.screen.active') || {}).id || '';
         if (!tiendaAbierta) {
-          showClosedNotice();
-        } else if (wasClosed) {
-          // Reopened!
+          const estaComprando = pantallaActiva === 'screen-menu' || pantallaActiva === 'screen-checkout' || pantallaActiva === 'screen-tent';
+          if (!wasClosed && estaComprando) showClosedNotice();
+        } else if (wasClosed && pantallaActiva === 'screen-offline') {
+          // Reopened! (solo le avisamos a quien estaba esperando en el letrero de "cerrada")
           const msg = lang==='es'
             ? '✅ ¡La tienda volvió a abrir! Ya puedes pedir.'
             : '✅ The store is open again! You can now order.';
